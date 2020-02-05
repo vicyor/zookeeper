@@ -6,8 +6,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 作者:姚克威
@@ -22,7 +25,6 @@ public class Worker implements Watcher {
     private String serverId = Integer.toHexString(random.nextInt());
     private String name = "worker-" + serverId;
     private CountDownLatch latch = new CountDownLatch(1);
-    private volatile String status;
 
     Worker(String hostPort) {
         this.hostPort = hostPort;
@@ -33,12 +35,13 @@ public class Worker implements Watcher {
     }
 
     void startZK() throws IOException {
+        log.error("启动ZooKeeper");
         zk = new ZooKeeper(hostPort, 15000, this);
     }
 
     @Override
     public void process(WatchedEvent event) {
-        log.info(event.toString() + "," + hostPort);
+        log.error(event.toString() + "," + hostPort);
     }
 
     AsyncCallback.StringCallback createWorkerCallback = new AsyncCallback.StringCallback() {
@@ -46,7 +49,9 @@ public class Worker implements Watcher {
         public void processResult(int rc, String path, Object ctx, String name) {
             switch (KeeperException.Code.get(rc)) {
                 case OK:
-                    log.info("Registered successfully: " + serverId);
+                    log.error("成功注册worker: " + serverId);
+                    createAssign();
+                    getTasks();
                     break;
                 case NODEEXISTS:
                     log.warn("Already registered: " + serverId);
@@ -67,35 +72,76 @@ public class Worker implements Watcher {
                 CreateMode.EPHEMERAL,
                 createWorkerCallback, null
         );
+
     }
 
-    /**
-     * 异步更新结果处理
-     */
-    AsyncCallback.StatCallback statUpCallback = new AsyncCallback.StatCallback() {
+    //创建assign
+    void createAssign() {
+        try {
+            log.error("创建/assing/{%s}",name);
+            zk.create("/assign/" + name, name.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+        } catch (KeeperException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+
+    Watcher newTaskWatcher = new Watcher() {
         @Override
-        public void processResult(int rc, String path, Object ctx, Stat stat) {
-            switch (KeeperException.Code.get(rc)) {
-                case CONNECTIONLOSS:
-                    /**
-                     * 保证安全性,异步status可能更新很慢,该worker其它线程可能又更新了status
-                     */
-                    if (ctx.toString().equals(status))
-                        updateStatus((String) ctx);
+        public void process(WatchedEvent event) {
+            if (event.getType() == Event.EventType.NodeChildrenChanged) {
+                assert ("/assign/" + name).equals(event.getPath());
+                getTasks();
             }
+
         }
     };
 
-    /**
-     * 更新worker状态
-     * @param status
-     */
-    void updateStatus(String status) {
-        this.status = status;
-        //context <=> status
-        zk.setData("/workers/" + name, status.getBytes(), -1, statUpCallback, status);
+    public void getTasks() {
+        log.error("获取任务列表");
+        zk.getChildren("/assign/" + name, newTaskWatcher, tasksGetChildrenCallback, null);
     }
 
+    ExecutorService threadPool = Executors.newCachedThreadPool();
+    AsyncCallback.ChildrenCallback tasksGetChildrenCallback = new AsyncCallback.ChildrenCallback() {
+        @Override
+        public void processResult(int rc, String path, Object ctx, List<String> children) {
+            switch (KeeperException.Code.get(rc)) {
+                case OK:
+                    if (children != null) {
+                        children.forEach(taskPath -> {
+                            Stat stat = new Stat();
+                            byte[] data = null;
+                            try {
+                                data = zk.getData("/assign/" + name + "/" + taskPath + "/done", false, stat);
+                            } catch (KeeperException e) {
+                                if (e.code() == KeeperException.Code.NONODE) {
+                                    try {
+                                        data = zk.getData("/assign/" + name + "/" + taskPath, false, stat);
+                                    } catch (KeeperException ex) {
+                                        ex.printStackTrace();
+                                    } catch (InterruptedException ex) {
+                                        ex.printStackTrace();
+                                    }
+                                    Task task = new Task(data, "/assgin/" + name + "/" + taskPath);
+                                    threadPool.execute(() -> {
+                                        log.info(name + "开始执行任务");
+                                        task.execute();
+                                        log.info("任务执行结束");
+                                        task.afterExecuted(zk);
+                                    });
+                                }
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                        });
+                    }
+            }
+        }
+    };
 
     public static void main(String[] args) throws IOException, InterruptedException {
         Worker w = new Worker();
