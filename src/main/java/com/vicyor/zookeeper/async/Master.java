@@ -1,67 +1,46 @@
 package com.vicyor.zookeeper.async;
 
 import org.apache.zookeeper.*;
-import org.apache.zookeeper.data.Stat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
-import java.util.concurrent.CountDownLatch;
 
 /**
  * 作者:姚克威
  * 时间:2020/2/4 13:10
  **/
 public class Master implements Watcher {
-    ZooKeeper zk;
-    String hostPort = "192.168.78.129:2181";
-    CountDownLatch latch = new CountDownLatch(1);
-
-    Master(String hostPort) {
-        this.hostPort = hostPort;
-    }
+    private ZooKeeper zk;
+    private String hostPort = "192.168.78.129:2181";
+    private Logger log = LoggerFactory.getLogger(Master.class);
 
     void startZK() throws IOException {
         zk = new ZooKeeper(hostPort, 15000, this);
     }
 
     public void process(WatchedEvent e) {
-        System.out.println(e);
+        log.info(e.toString());
     }
 
     public void stopZK() throws Exception {
         zk.close();
     }
 
-    public Master() {
-    }
 
     private Random random = new Random();
 
     private String serverId = Integer.toHexString(random.nextInt());
-    private boolean isLeader = false;
 
-    public void checkMaster() {
-        zk.getData("/master", false, masterCheckCallback, null);
-    }
+    private boolean isLeader = false;
 
     public void runForMaster() {
         zk.create("/master", serverId.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL, masterCreateCallback, null);
     }
 
-    AsyncCallback.DataCallback masterCheckCallback = new AsyncCallback.DataCallback() {
-
-        @Override
-        public void processResult(int rc, String path, Object ctx, byte[] data, Stat stat) {
-            switch (KeeperException.Code.get(rc)) {
-                case CONNECTIONLOSS:
-                    checkMaster();
-                    return;
-                case NODEEXISTS:
-                    runForMaster();
-                    return;
-            }
-        }
-    };
     /**
      * 创建/master节点 回调
      */
@@ -69,57 +48,84 @@ public class Master implements Watcher {
         @Override
         public void processResult(int rc, String path, Object ctx, String name) {
             switch (KeeperException.Code.get(rc)) {
-                case CONNECTIONLOSS:
-                    checkMaster();
-                    return;
                 case OK:
                     isLeader = true;
+                    log.info("I'm the leader");
                     break;
                 case NODEEXISTS:
+                    log.info("已经存在主节点");
                     isLeader = false;
-                    checkMaster();
-                    return;
+                    masterExists();
+                    break;
             }
-            System.out.println("I'm the leader");
+
         }
     };
-    AsyncCallback.StringCallback createParentCallback = new AsyncCallback.StringCallback() {
+
+    Watcher masterExistsWatcher = new Watcher() {
         @Override
-        public void processResult(int rc, String path, Object ctx, String name) {
-            switch (KeeperException.Code.get(rc)) {
-                case CONNECTIONLOSS:
-                    createParent(path, (byte[]) ctx);
-                    break;
-                case OK:
-                    System.out.println("Parent created");
-                    break;
-                case NODEEXISTS:
-                    System.out.println("Parent already registered: " + path);
+        public void process(WatchedEvent event) {
+            System.err.println(event);
+            if (event.getType() == Event.EventType.NodeDeleted) {
+                log.info("主节点宕机");
+                runForMaster();
             }
         }
     };
 
-    void createParent(String path, byte[] data) {
-        zk.create(path, data, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, createParentCallback, data);
+    void masterExists() {
+        try {
+            zk.exists("/master", masterExistsWatcher);
+        } catch (KeeperException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
     }
-
-    /**
-     * 设置元数据
-     */
-    public void bootstrap() {
-        createParent("/workers", new byte[0]);
-        createParent("/assign", new byte[0]);
-        createParent("/tasks", new byte[0]);
-        createParent("/status", new byte[0]);
+    private List<String>workers=new ArrayList<>();
+    Watcher workersChangeWatcher=new Watcher() {
+        @Override
+        public void process(WatchedEvent event) {
+            if(event.getType()== Event.EventType.NodeChildrenChanged){
+                assert  "/workers".equals(event.getPath());
+                getWorkers();
+            }
+        }
+    };
+    AsyncCallback.ChildrenCallback workersGetChildrenCallback=new AsyncCallback.ChildrenCallback() {
+        @Override
+        public void processResult(int rc, String path, Object ctx, List<String> children) {
+            switch (KeeperException.Code.get(rc)){
+                case OK:
+                    log.info("成功的获取workers列表");
+                    reassignAndSet(children);
+            }
+        }
+    };
+    void reassignAndSet(List<String>children){
+        List <String>expired=new ArrayList<>();
+        for(String worker:children){
+            if(!workers.contains(worker)) expired.add(worker);
+        }
+        workers=children;
+        /**
+         * 对过期的worker处理
+         */
+         for(String e:expired){
+             //TODO
+             //getAbsentWorkerTasks(worker);
+         }
     }
-
+    void getWorkers(){
+        zk.getChildren("/workers",workersChangeWatcher,workersGetChildrenCallback,null);
+    }
     public static void main(String[] args) throws Exception {
         Master m = new Master();
         m.startZK();
-        m.bootstrap();
         m.runForMaster();
-        m.latch.await();
+        Thread.sleep(1000000000);
         m.stopZK();
-
     }
+
+
 }
