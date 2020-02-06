@@ -13,11 +13,18 @@ import java.io.IOException;
 public class BootStrap implements Watcher {
     private Logger log = LoggerFactory.getLogger(BootStrap.class);
     ZooKeeper zooKeeper=null;
-    public BootStrap() throws IOException {
+    public BootStrap()  {
     }
 
     public static void main(String[] args) {
-
+        try {
+            BootStrap  bootStrap=new BootStrap();
+            bootStrap.startZk();
+            bootStrap.bootstrap();
+            System.in.read();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
     void  startZk() throws IOException {
         zooKeeper = new ZooKeeper("192.168.78.129:2181", 1000, this);

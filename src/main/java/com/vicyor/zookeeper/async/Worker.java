@@ -1,5 +1,6 @@
 package com.vicyor.zookeeper.async;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.zookeeper.*;
 import org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
@@ -16,9 +17,9 @@ import java.util.concurrent.Executors;
  * 作者:姚克威
  * 时间:2020/2/4 14:32
  **/
+@Slf4j
 public class Worker implements Watcher {
 
-    private static final Logger log = LoggerFactory.getLogger(Worker.class);
     private ZooKeeper zk;
     private String hostPort = "192.168.78.129:2181";
     private Random random = new Random();
@@ -78,7 +79,7 @@ public class Worker implements Watcher {
     //创建assign
     void createAssign() {
         try {
-            log.error("创建/assing/{%s}",name);
+            log.error("创建/assign/{%s}",name);
             zk.create("/assign/" + name, name.getBytes(), ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
         } catch (KeeperException e) {
             e.printStackTrace();
@@ -126,7 +127,7 @@ public class Worker implements Watcher {
                                     } catch (InterruptedException ex) {
                                         ex.printStackTrace();
                                     }
-                                    Task task = new Task(data, "/assgin/" + name + "/" + taskPath);
+                                    Task task = new Task(data, "/assign/" + name + "/" + taskPath);
                                     threadPool.execute(() -> {
                                         log.info(name + "开始执行任务");
                                         task.execute();

@@ -13,16 +13,19 @@ public class Client implements Watcher {
     public void process(WatchedEvent event) {
         System.out.println(event);
     }
-    private CountDownLatch latch=new CountDownLatch(1);
+
+    private CountDownLatch latch = new CountDownLatch(1);
     private ZooKeeper zk;
-    private String hostPort="192.168.78.129:2181";
+    private String hostPort = "192.168.78.129:2181";
 
     Client(String hostPort) {
         this.hostPort = hostPort;
     }
-   Client(){
 
-   }
+    Client() {
+
+    }
+
     void startZK() throws Exception {
         zk = new ZooKeeper(hostPort, 15000, this);
     }
@@ -39,10 +42,12 @@ public class Client implements Watcher {
     }
 
     public static void main(String[] args) throws Exception {
-        Client c=new Client();
+        Client c = new Client();
         c.startZK();
-        String name= c.queueCommand("hello,world");
-        System.out.println("Created "+name);
+        for (int i = 0; i < 10; i++) {
+            String name = c.queueCommand("hello,world");
+            System.out.println("Created " + name);
+        }
         c.latch.await();
     }
 }

@@ -1,9 +1,8 @@
 package com.vicyor.zookeeper.async;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.zookeeper.*;
 import org.apache.zookeeper.data.Stat;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -14,10 +13,10 @@ import java.util.Random;
  * 作者:姚克威
  * 时间:2020/2/4 13:10
  **/
+@Slf4j
 public class Master implements Watcher {
     private ZooKeeper zk;
     private String hostPort = "192.168.78.129:2181";
-    private Logger log = LoggerFactory.getLogger(Master.class);
 
     void startZK() throws IOException {
         log.error("启动ZK");
@@ -25,7 +24,7 @@ public class Master implements Watcher {
     }
 
     public void process(WatchedEvent e) {
-        log.error("zk会话事件=>"+e.toString());
+        log.error("zk会话事件=>" + e.toString());
     }
 
     public void stopZK() throws Exception {
@@ -95,6 +94,8 @@ public class Master implements Watcher {
                 log.error("/workers 子节点改变");
                 assert "/workers".equals(event.getPath());
                 getWorkers();
+                //再次分配任务
+                getTasks();
             }
         }
     };
@@ -111,15 +112,15 @@ public class Master implements Watcher {
 
     void reassignAndSet(List<String> children) {
         List<String> expired = new ArrayList<>();
-        for (String worker : children) {
-            if (!workers.contains(worker)) expired.add(worker);
+        for (String worker : workers) {
+            if (!children.contains(worker))
+                expired.add(worker);
         }
         workers = children;
         /**
          * 对过期的worker的任务的处理
          */
         for (String eWorker : expired) {
-
             getAbsentWorkerTasks(eWorker);
         }
     }
@@ -140,7 +141,7 @@ public class Master implements Watcher {
                         String worker = workers.get(workerIndex);
                         data = zk.getData("/assign/" + eWorker + "/" + task, false, stat);
                         zk.create("/assign/" + worker + "/" + task, data, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT, assignTaskCallback, null);
-                        deleteAssignTask(eWorker,task);
+                        deleteAssignTask(eWorker, task);
                     }
                 }
             }
@@ -151,9 +152,9 @@ public class Master implements Watcher {
         }
     }
 
-    void deleteAssignTask(String eWork,String task) {
+    void deleteAssignTask(String eWork, String task) {
         try {
-            zk.delete("/assign/"+eWork+"/"+task,-1);
+            zk.delete("/assign/" + eWork + "/" + task, -1);
         } catch (InterruptedException e) {
             e.printStackTrace();
         } catch (KeeperException e) {
@@ -211,14 +212,12 @@ public class Master implements Watcher {
                     /**
                      * 随机的选择一个worker,处理
                      */
+                    if (workers == null || workers.size() == 0) break;
                     int workerIndex = random.nextInt(workers.size());
                     String worker = workers.get(workerIndex);
-                    log.error("选择一个worker:{%s }处理task:{%s}",worker,ctx);
+                    log.error(" 选择一个worker: {%s} 处理task: {%s}", worker, ctx);
                     String assignmentPath = "/assign/" + worker + "/" + ctx;
                     createAssignment(assignmentPath, data);
-                    //有可能任务被其它worker处理删除了
-                case NODEEXISTS:
-                    break;
             }
         }
     };
@@ -240,7 +239,7 @@ public class Master implements Watcher {
 
     void deleteTask(String task) {
         try {
-            log.error("删除/tasks/{%s}",task);
+            log.error("删除/tasks/{%s}", task);
             zk.delete("/tasks/" + task, -1);
         } catch (InterruptedException e) {
             e.printStackTrace();
